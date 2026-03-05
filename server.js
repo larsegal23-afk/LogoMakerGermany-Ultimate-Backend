@@ -165,10 +165,10 @@ app.get("/", (req, res) => {
 COIN PACKS (Frontend display)
 
 const COIN_PACKS = {
-  coins_120:  { coins: 120,  display: "4,99 €",  unit_amount: 499,  name: "120 Coins Paket",  priceId: "price_1T6urn2aeCQNbsN6wCtC5mkGV" },
-  coins_300:  { coins: 300,  display: "9,99 €",  unit_amount: 999,  name: "300 Coins Paket",  priceId: "price_1T6utu2aeCQNbsN6suXJWEvX" },
-  coins_700:  { coins: 700,  display: "19,99 €", unit_amount: 1999, name: "700 Coins Paket",  priceId: "price_1T6uti2aeCQNbsN6SYJTsmpZ" },
-  coins_2000: { coins: 2000, display: "49,90 €", unit_amount: 4990, name: "2000 Coins Paket", priceId: "price_1T6uuJ2aeCQNbsN6hNuF2NmH" }
+  coins_120:  { coins: 120,  display: "4,99 Ã¢â€šÂ¬",  unit_amount: 499,  name: "120 Coins Paket",  priceId: "price_1T6urn2aeCQNbsN6wCtC5mkGV" },
+  coins_300:  { coins: 300,  display: "9,99 Ã¢â€šÂ¬",  unit_amount: 999,  name: "300 Coins Paket",  priceId: "price_1T6utu2aeCQNbsN6suXJWEvX" },
+  coins_700:  { coins: 700,  display: "19,99 Ã¢â€šÂ¬", unit_amount: 1999, name: "700 Coins Paket",  priceId: "price_1T6uti2aeCQNbsN6SYJTsmpZ" },
+  coins_2000: { coins: 2000, display: "49,90 Ã¢â€šÂ¬", unit_amount: 4990, name: "2000 Coins Paket", priceId: "price_1T6uuJ2aeCQNbsN6hNuF2NmH" }
 }
 
 app.get("/api/packs", (req, res) => {
@@ -298,7 +298,7 @@ app.post("/api/generate-logo", async (req, res) => {
 
     const userRef = db.collection("users").doc(userId)
 
-    // ✅ ATOMIC coin check + deduct (prevents multi-request exploit)
+    // Ã¢Å“â€¦ ATOMIC coin check + deduct (prevents multi-request exploit)
     let newCoins = 0
     await db.runTransaction(async (t) => {
       const snap = await t.get(userRef)
@@ -662,7 +662,7 @@ app.post("/api/generate-30s", async (req, res) => {
     let cost = assets.length * 8
     if(isPremium) cost = Math.floor(cost * 0.8)
 
-    // ✅ atomic charge
+    // Ã¢Å“â€¦ atomic charge
     let newCoins = 0
     await db.runTransaction(async (t) => {
       const snap = await t.get(userRef)
@@ -716,5 +716,5 @@ START SERVER
 
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
-  console.log(`🚀 Backend running on port ${PORT}`)
+  console.log(`Ã°Å¸Å¡â‚¬ Backend running on port ${PORT}`)
 })
