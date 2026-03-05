@@ -1,0 +1,29 @@
+﻿# deps
+node_modules/
+
+# env / secrets
+.env
+.env.*
+*.env
+firebase-adminsdk*.json
+*adminsdk*.json
+*serviceAccount*.json
+serviceAccountKey.json
+
+# patch backups
+_patch_backup/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# build
+dist/
+build/

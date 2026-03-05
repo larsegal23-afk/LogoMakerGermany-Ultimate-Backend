@@ -1,0 +1,17 @@
+{
+  "twitch": {
+    "assets": [
+      { "name": "profile", "size": "512x512", "prompt": "Twitch profile logo" },
+      { "name": "banner", "size": "1200x480", "prompt": "Twitch banner esports style" },
+      { "name": "overlay", "size": "1920x1080", "prompt": "Gaming stream overlay" },
+      { "name": "brb", "size": "1920x1080", "prompt": "BRB stream screen" }
+    ]
+  },
+  "tiktok": {
+    "assets": [
+      { "name": "profile", "size": "512x512", "prompt": "TikTok profile logo" },
+      { "name": "banner", "size": "1080x1920", "prompt": "TikTok vertical banner" },
+      { "name": "overlay", "size": "1080x1920", "prompt": "Vertical stream overlay" }
+    ]
+  }
+}
