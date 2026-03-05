@@ -27,3 +27,6 @@ Thumbs.db
 # build
 dist/
 build/
+
+*.bak
+
