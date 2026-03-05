@@ -3,16 +3,20 @@ import cors from "cors"
 import dotenv from "dotenv"
 import OpenAI from "openai"
 import admin from "firebase-admin"
-import fs from "fs"
 import rateLimit from "express-rate-limit"
 import Stripe from "stripe"
 
 dotenv.config()
 
+/* ================================
+BOOT
+================================ */
+
 const app = express()
 
 /* ================================
 CORS (locked)
+================================ */
 
 const allowedOrigins = [
   process.env.FRONTEND_BASE_URL,
@@ -22,268 +26,142 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, cb) => {
-    // allow non-browser tools (no origin)
-    if(!origin) return cb(null, true)
-    if(allowedOrigins.includes(origin)) return cb(null, true)
+    if (!origin) return cb(null, true) // allow tools without origin
+    if (allowedOrigins.includes(origin)) return cb(null, true)
     return cb(new Error("Not allowed by CORS"))
   },
   credentials: true
 }))
-/* =========================
-STRIPE
 
-const stripeSecret = process.env.STRIPE_SECRET_KEY || ""
-const stripe = stripeSecret ? new Stripe(stripeSecret, { apiVersion: "2024-06-20" }) : null
-const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || ""
+/* ================================
+BODY PARSERS
+Stripe webhook needs RAW body
+================================ */
 
-function getOrigin(req){
-  return FRONTEND_BASE_URL || req.headers.origin || "http://localhost:5500"
-}
+app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  try {
+    if (!process.env.STRIPE_SECRET_KEY) return res.status(200).send("Stripe not configured")
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" })
 
-/* =========================
-FIREBASE ADMIN
+    const sig = req.headers["stripe-signature"]
+    const secret = process.env.STRIPE_WEBHOOK_SECRET
+    if (!sig || !secret) return res.status(400).send("Missing webhook secret/signature")
 
-if(!process.env.FIREBASE_SERVICE_ACCOUNT){
-  console.error("FIREBASE_SERVICE_ACCOUNT is missing!")
-  process.exit(1)
-}
+    const event = stripe.webhooks.constructEvent(req.body, sig, secret)
 
-let serviceAccount
-try{
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-}catch(err){
-  console.error("Invalid FIREBASE_SERVICE_ACCOUNT JSON")
-  console.error(err)
-  process.exit(1)
-}
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+    // TODO: here you would credit coins after successful checkout (checkout.session.completed)
+    // Keep it safe: always verify metadata userId etc.
+    return res.json({ received: true, type: event.type })
+  } catch (e) {
+    console.error("Webhook error:", e?.message || e)
+    return res.status(400).send("Webhook error")
+  }
 })
 
-const db = admin.firestore()
+app.use(express.json({ limit: "2mb" }))
 
-/* =========================
+/* ================================
+RATE LIMIT
+================================ */
+
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20
+})
+app.use("/api/", limiter)
+
+/* ================================
+FIREBASE ADMIN
+================================ */
+
+function loadServiceAccountFromEnv() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT
+  if (!raw) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT")
+  try {
+    return JSON.parse(raw)
+  } catch (e) {
+    throw new Error("Invalid FIREBASE_SERVICE_ACCOUNT JSON")
+  }
+}
+
+try {
+  if (!admin.apps.length) {
+    const serviceAccount = loadServiceAccountFromEnv()
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    })
+  }
+} catch (e) {
+  console.error("Firebase Admin init failed:", e?.message || e)
+}
+
+const db = admin.apps.length ? admin.firestore() : null
+
+/* ================================
+OPENAI
+================================ */
+
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
+
+/* ================================
 AUTH MIDDLEWARE
+================================ */
 
-async function requireAuth(req, res, next){
-  try{
+async function requireAuth(req, res, next) {
+  try {
     const hdr = req.headers.authorization || ""
     const m = hdr.match(/^Bearer (.+)$/)
-    if(!m) return res.status(401).json({ error: "Missing Authorization Bearer token" })
+    if (!m) return res.status(401).json({ error: "Missing Authorization Bearer token" })
+    if (!admin.apps.length) return res.status(500).json({ error: "Firebase Admin not initialized" })
 
     const decoded = await admin.auth().verifyIdToken(m[1])
     req.user = decoded
     return next()
-  }catch(err){
+  } catch (e) {
     return res.status(401).json({ error: "Invalid token" })
   }
 }
 
-/* =========================
-OPENAI
-
-if(!process.env.OPENAI_API_KEY){
-  console.error("OPENAI_API_KEY is missing!")
-  process.exit(1)
-}
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-
-/* =====================================================
-STRIPE WEBHOOK (RAW BODY!) MUST be BEFORE express.json
-
-app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  try{
-    if(!stripe) return res.status(500).send("Stripe not configured")
-
-    const sig = req.headers["stripe-signature"]
-    const secret = process.env.STRIPE_WEBHOOK_SECRET
-    if(!secret) return res.status(500).send("Missing STRIPE_WEBHOOK_SECRET")
-
-    let event
-    try{
-      event = stripe.webhooks.constructEvent(req.body, sig, secret)
-    }catch(err){
-      console.error("Webhook signature verification failed:", err.message)
-      return res.status(400).send(`Webhook Error: ${err.message}`)
-    }
-
-    if(event.type === "checkout.session.completed"){
-      const session = event.data.object
-      const userId = session.metadata?.userId
-      const coins = parseInt(session.metadata?.coins || "0", 10)
-
-      if(userId && coins > 0){
-        await db.collection("users").doc(userId).set({
-          coins: admin.firestore.FieldValue.increment(coins)
-        }, { merge: true })
-      }
-    }
-
-    return res.json({ received: true })
-  }catch(err){
-    console.error(err)
-    return res.status(500).send("Webhook handler failed")
-  }
-})
-
-/* =========================
-JSON BODY (AFTER WEBHOOK)
-
-app.use(express.json({ limit: "25mb" }))
-
-/* =========================
-RATE LIMIT
-
-const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 5
-})
-
-// NOTE: Do NOT rate-limit stripe webhook
-app.use("/api/generate-logo", limiter)
-app.use("/api/generate-30s", limiter)
-app.use("/api/logo-from-image", limiter)
-app.use("/api/improve-logo", limiter)
-app.use("/api/style-dna", limiter)
-app.use("/api/create-checkout-session", limiter)
-
-/* =====================================================
-HEALTH CHECK
+/* ================================
+HEALTH
+================================ */
 
 app.get("/", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    service: "LogoMakerGermany Backend",
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
-  })
+  res.status(200).send("OK")
 })
 
-/* =====================================================
-COIN PACKS (Frontend display)
+/* ================================
+COINS
+================================ */
 
-const COIN_PACKS = {
-  coins_120:  { coins: 120,  display: "4,99 Ã¢â€šÂ¬",  unit_amount: 499,  name: "120 Coins Paket",  priceId: "price_1T6urn2aeCQNbsN6wCtC5mkGV" },
-  coins_300:  { coins: 300,  display: "9,99 Ã¢â€šÂ¬",  unit_amount: 999,  name: "300 Coins Paket",  priceId: "price_1T6utu2aeCQNbsN6suXJWEvX" },
-  coins_700:  { coins: 700,  display: "19,99 Ã¢â€šÂ¬", unit_amount: 1999, name: "700 Coins Paket",  priceId: "price_1T6uti2aeCQNbsN6SYJTsmpZ" },
-  coins_2000: { coins: 2000, display: "49,90 Ã¢â€šÂ¬", unit_amount: 4990, name: "2000 Coins Paket", priceId: "price_1T6uuJ2aeCQNbsN6hNuF2NmH" }
-}
-
-app.get("/api/packs", (req, res) => {
-  const out = {}
-  for(const [k,v] of Object.entries(COIN_PACKS)){
-    out[k] = { coins: v.coins, display: v.display }
-  }
-  return res.json(out)
-})
-
-/* =====================================================
-GET USER COINS (secure)
-
-app.post("/api/get-coins", requireAuth, async (req, res) => {
-  try{
+app.get("/api/get-coins", requireAuth, async (req, res) => {
+  try {
+    if (!db) return res.status(500).json({ error: "DB not ready" })
     const userId = req.user.uid
     const ref = db.collection("users").doc(userId)
     const snap = await ref.get()
-
-    if(!snap.exists){
-      await ref.set({ uid: userId, coins: 0, premiumUntil: 0, createdAt: Date.now() }, { merge: true })
-      return res.json({ coins: 0, premiumUntil: 0 })
-    }
-
+    if (!snap.exists) return res.json({ coins: 0 })
     const data = snap.data() || {}
-    return res.json({
-      coins: data.coins || 0,
-      premiumUntil: data.premiumUntil || 0
-    })
-  }catch(err){
-    console.error(err)
+    return res.json({ coins: data.coins || 0 })
+  } catch (e) {
+    console.error(e)
     return res.status(500).json({ error: "Failed to load coins" })
   }
 })
 
-/* =====================================================
-COIN PURCHASE (STRIPE CHECKOUT)
-
-app.post("/api/create-checkout-session", requireAuth, async (req, res) => {
-  try{
-    if(!stripe) return res.status(500).json({ error: "Stripe not configured" })
-
-    const userId = req.user.uid
-    const { packId } = req.body
-    if(!packId) return res.status(400).json({ error: "Missing data" })
-COIN PURCHASE (STRIPE CHECKOUT)
-
-app.post("/api/create-checkout-session", async (req, res) => {
-  try{
-    if(!stripe) return res.status(500).json({ error: "Stripe not configured" })
-
-    const { userId, packId } = req.body
-    if(!userId || !packId) return res.status(400).json({ error: "Missing data" })
-
-    const pack = COIN_PACKS[packId]
-    if(!pack) return res.status(400).json({ error: "Unknown pack" })
-
-    // Optional: ensure user doc exists (create minimal doc if missing)
-    const userRef = db.collection("users").doc(userId)
-    const userDoc = await userRef.get()
-    if(!userDoc.exists){
-      await userRef.set({
-        uid: userId,
-        coins: 0,
-        premiumUntil: 0,
-        createdAt: Date.now()
-      }, { merge: true })
-    }
-    const userRef = db.collection("users").doc(userId)
-    const userDoc = await userRef.get()
-    if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
-
-    const origin = getOrigin(req)
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      line_items: pack.priceId
-        ? [{ price: pack.priceId, quantity: 1 }]
-        : [{
-            price_data: {
-              currency: "eur",
-              product_data: { name: pack.name },
-              unit_amount: pack.unit_amount
-            },
-            quantity: 1
-          }],
-      metadata: {
-        userId,
-        coins: String(pack.coins),
-        packId
-      },
-      success_url: origin + "/?checkout=success",
-      cancel_url: origin + "/?checkout=cancel"
-    })
-
-    return res.json({ url: session.url })
-  }catch(err){
-    console.error(err)
-    return res.status(500).json({ error: "Checkout session failed" })
-  }
-})
-
-/* =====================================================
-SINGLE LOGO GENERATION
+/* ================================
+GENERATE LOGO (atomic coins)
+================================ */
 
 app.post("/api/generate-logo", requireAuth, async (req, res) => {
-  try{
-    const { prompt, renderMode } = req.body
+  try {
+    if (!db) return res.status(500).json({ error: "DB not ready" })
+    if (!openai) return res.status(500).json({ error: "OpenAI not configured" })
+
+    const { prompt, renderMode } = req.body || {}
+    if (!prompt || !renderMode) return res.status(400).json({ error: "Missing prompt/renderMode" })
+
     const userId = req.user.uid
-    if(!prompt || !renderMode)
-app.post("/api/generate-logo", async (req, res) => {
-  try{
-    const { prompt, renderMode, userId } = req.body
-    if(!prompt || !renderMode || !userId)
-      return res.status(400).json({ error: "Missing data" })
 
     const renderCosts = {
       "2d": 5,
@@ -295,46 +173,27 @@ app.post("/api/generate-logo", async (req, res) => {
     }
 
     let cost = renderCosts[renderMode] || 10
-
     const userRef = db.collection("users").doc(userId)
 
-    // Ã¢Å“â€¦ ATOMIC coin check + deduct (prevents multi-request exploit)
     let newCoins = 0
+
     await db.runTransaction(async (t) => {
       const snap = await t.get(userRef)
-      if(!snap.exists) throw new Error("USER_NOT_FOUND")
+      if (!snap.exists) throw new Error("USER_NOT_FOUND")
 
-      const userData = snap.data() || {}
-      const currentCoins = userData.coins || 0
-      const premiumUntil = userData.premiumUntil || 0
+      const data = snap.data() || {}
+      const currentCoins = data.coins || 0
+      const premiumUntil = data.premiumUntil || 0
       const isPremium = premiumUntil > Date.now()
 
-      if(renderMode === "master_overkill" && !isPremium)
-        throw new Error("PREMIUM_REQUIRED")
+      if (renderMode === "master_overkill" && !isPremium) throw new Error("PREMIUM_REQUIRED")
+      if (isPremium) cost = Math.floor(cost * 0.9)
 
-      if(isPremium) cost = Math.floor(cost * 0.9)
-
-      if(currentCoins < cost)
-        throw new Error("NOT_ENOUGH_COINS")
+      if (currentCoins < cost) throw new Error("NOT_ENOUGH_COINS")
 
       newCoins = currentCoins - cost
       t.update(userRef, { coins: newCoins })
     })
-    const userDoc = await userRef.get()
-    if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
-
-    const userData = userDoc.data() || {}
-    const currentCoins = userData.coins || 0
-    const premiumUntil = userData.premiumUntil || 0
-    const isPremium = premiumUntil > Date.now()
-
-    if(renderMode === "master_overkill" && !isPremium)
-      return res.status(403).json({ error: "Master Overkill requires Premium." })
-
-    if(isPremium) cost = Math.floor(cost * 0.9)
-
-    if(currentCoins < cost)
-      return res.status(403).json({ error: "Not enough coins" })
 
     const result = await openai.images.generate({
       model: "gpt-image-1",
@@ -343,378 +202,28 @@ app.post("/api/generate-logo", async (req, res) => {
       background: "transparent"
     })
 
-    const imageBase64 = result.data[0].b64_json
-
-    return res.json({
-      image: `data:image/png;base64,${imageBase64}`,
-      newCoins
-    })
-  }catch(err){
-    if(err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
-    if(err.message === "PREMIUM_REQUIRED") return res.status(403).json({ error: "Master Overkill requires Premium." })
-    if(err.message === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
-    await userRef.update({ coins: currentCoins - cost })
-
-    return res.json({
-      image: `data:image/png;base64,${imageBase64}`,
-      newCoins: currentCoins - cost
-    })
-  }catch(err){
-    console.error(err)
-    return res.status(500).json({ error: "Image generation failed" })
-  }
-})
-
-/* =====================================================
-STYLE DNA (analyze uploaded image -> reusable prompt)
-
-app.post("/api/style-dna", requireAuth, async (req, res) => {
-  try{
-    const { imageDataUrl } = req.body
-    const userId = req.user.uid
-    if(!imageDataUrl)
-      return res.status(400).json({ error: "Missing data" })
-
-    // ensure user exists
-app.post("/api/style-dna", async (req, res) => {
-  try{
-    const { imageDataUrl, userId } = req.body
-    if(!imageDataUrl || !userId)
-      return res.status(400).json({ error: "Missing data" })
-
-    const userRef = db.collection("users").doc(userId)
-    const userDoc = await userRef.get()
-    if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
-
-    const resp = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text:
-                "Analyze this image style and output JSON with keys: styleDNA (one short line to append to prompts), palette (array of up to 5 hex colors if you can infer), vibeTags (array of up to 8 short tags). Keep styleDNA under 200 characters. Output JSON only."
-            },
-            { type: "input_image", image_url: imageDataUrl, detail: "auto" }
-          ]
-        }
-      ]
-    })
-
-    const txt = resp.output_text || "{}"
-    let json
-    try{
-      json = JSON.parse(txt)
-    }catch{
-      json = { styleDNA: String(txt).slice(0, 200), palette: [], vibeTags: [] }
-    }
-
-    return res.json({
-      styleDNA: (json.styleDNA || "").slice(0, 200),
-      palette: Array.isArray(json.palette) ? json.palette.slice(0, 5) : [],
-      vibeTags: Array.isArray(json.vibeTags) ? json.vibeTags.slice(0, 8) : []
-    })
-  }catch(err){
-    console.error(err)
-    return res.status(500).json({ error: "Style analysis failed" })
-  }
-})
-
-/* =====================================================
-SELFIE -> LOGO (image edit)
-
-app.post("/api/logo-from-image", requireAuth, async (req, res) => {
-  try{
-    const { imageDataUrl, name, renderMode, styleDNA } = req.body
-    const userId = req.user.uid
-    if(!imageDataUrl || !name || !renderMode)
-app.post("/api/logo-from-image", async (req, res) => {
-  try{
-    const { imageDataUrl, name, renderMode, userId, styleDNA } = req.body
-    if(!imageDataUrl || !name || !renderMode || !userId)
-      return res.status(400).json({ error: "Missing data" })
-
-    const renderCosts = {
-      "2d": 8,
-      "3d": 12,
-      "realistic": 25,
-      "overkill": 40,
-      "ultra_overkill": 60,
-      "master_overkill": 90
-    }
-
-    let cost = renderCosts[renderMode] || 12
-
-    const userRef = db.collection("users").doc(userId)
-
-    let newCoins = 0
-    await db.runTransaction(async (t) => {
-      const snap = await t.get(userRef)
-      if(!snap.exists) throw new Error("USER_NOT_FOUND")
-
-      const userData = snap.data() || {}
-      const currentCoins = userData.coins || 0
-      const premiumUntil = userData.premiumUntil || 0
-      const isPremium = premiumUntil > Date.now()
-
-      if(renderMode === "master_overkill" && !isPremium)
-        throw new Error("PREMIUM_REQUIRED")
-
-      if(isPremium) cost = Math.floor(cost * 0.9)
-
-      if(currentCoins < cost)
-        throw new Error("NOT_ENOUGH_COINS")
-
-      newCoins = currentCoins - cost
-      t.update(userRef, { coins: newCoins })
-    })
-    const userDoc = await userRef.get()
-    if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
-
-    const userData = userDoc.data() || {}
-    const currentCoins = userData.coins || 0
-    const premiumUntil = userData.premiumUntil || 0
-    const isPremium = premiumUntil > Date.now()
-
-    if(renderMode === "master_overkill" && !isPremium)
-      return res.status(403).json({ error: "Master Overkill requires Premium." })
-
-    if(isPremium) cost = Math.floor(cost * 0.9)
-
-    if(currentCoins < cost)
-      return res.status(403).json({ error: "Not enough coins" })
-
-    const prompt = `
-Create a professional esports gaming logo from the uploaded selfie.
-Keep it recognizable but stylize into a clean mascot/emblem design.
-Centered bust/face silhouette, bold outlines, high contrast.
-Add the text '${name}' cleanly.
-${styleDNA ? "Style DNA: " + styleDNA : ""}
-Transparent background.
-`
-
-    const result = await openai.images.edit({
-      model: "gpt-image-1",
-      images: [{ image_url: imageDataUrl }],
-      prompt,
-      background: "transparent",
-      input_fidelity: "low",
-      size: "1024x1024"
-    })
-
     const imageBase64 = result.data?.[0]?.b64_json
-    if(!imageBase64) return res.status(500).json({ error: "No image returned" })
+    if (!imageBase64) return res.status(500).json({ error: "No image returned" })
 
     return res.json({
       image: `data:image/png;base64,${imageBase64}`,
       newCoins
     })
-  }catch(err){
-    if(err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
-    if(err.message === "PREMIUM_REQUIRED") return res.status(403).json({ error: "Master Overkill requires Premium." })
-    if(err.message === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
-    await userRef.update({ coins: currentCoins - cost })
-
-    return res.json({
-      image: `data:image/png;base64,${imageBase64}`,
-      newCoins: currentCoins - cost
-    })
-  }catch(err){
-    console.error(err)
-    return res.status(500).json({ error: "Selfie logo generation failed" })
+  } catch (e) {
+    const msg = e?.message || String(e)
+    if (msg === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
+    if (msg === "PREMIUM_REQUIRED") return res.status(403).json({ error: "Premium required" })
+    if (msg === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
+    console.error(e)
+    return res.status(500).json({ error: "Generation failed" })
   }
 })
 
-/* =====================================================
-IMPROVE EXISTING LOGO (image edit)
-
-app.post("/api/improve-logo", requireAuth, async (req, res) => {
-  try{
-    const { imageDataUrl, renderMode, notes } = req.body
-    const userId = req.user.uid
-    if(!imageDataUrl || !renderMode)
-app.post("/api/improve-logo", async (req, res) => {
-  try{
-    const { imageDataUrl, renderMode, userId, notes } = req.body
-    if(!imageDataUrl || !renderMode || !userId)
-      return res.status(400).json({ error: "Missing data" })
-
-    const renderCosts = {
-      "2d": 6,
-      "3d": 10,
-      "realistic": 20,
-      "overkill": 30,
-      "ultra_overkill": 45,
-      "master_overkill": 70
-    }
-
-    let cost = renderCosts[renderMode] || 10
-
-    const userRef = db.collection("users").doc(userId)
-
-    let newCoins = 0
-    await db.runTransaction(async (t) => {
-      const snap = await t.get(userRef)
-      if(!snap.exists) throw new Error("USER_NOT_FOUND")
-
-      const userData = snap.data() || {}
-      const currentCoins = userData.coins || 0
-      const premiumUntil = userData.premiumUntil || 0
-      const isPremium = premiumUntil > Date.now()
-
-      if(renderMode === "master_overkill" && !isPremium)
-        throw new Error("PREMIUM_REQUIRED")
-
-      if(isPremium) cost = Math.floor(cost * 0.9)
-
-      if(currentCoins < cost)
-        throw new Error("NOT_ENOUGH_COINS")
-
-      newCoins = currentCoins - cost
-      t.update(userRef, { coins: newCoins })
-    })
-    const userDoc = await userRef.get()
-    if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
-
-    const userData = userDoc.data() || {}
-    const currentCoins = userData.coins || 0
-    const premiumUntil = userData.premiumUntil || 0
-    const isPremium = premiumUntil > Date.now()
-
-    if(renderMode === "master_overkill" && !isPremium)
-      return res.status(403).json({ error: "Master Overkill requires Premium." })
-
-    if(isPremium) cost = Math.floor(cost * 0.9)
-
-    if(currentCoins < cost)
-      return res.status(403).json({ error: "Not enough coins" })
-
-    const prompt = `
-Improve this logo to next level while keeping the same identity.
-Keep composition and core shapes recognizable.
-Make it cleaner, sharper, higher contrast, better typography, remove artifacts.
-Enhance edges, symmetry, and professional esports finish.
-${notes ? "User notes: " + notes : ""}
-Transparent background.
-`
-
-    const result = await openai.images.edit({
-      model: "gpt-image-1",
-      images: [{ image_url: imageDataUrl }],
-      prompt,
-      background: "transparent",
-      input_fidelity: "high",
-      size: "1024x1024"
-    })
-
-    const imageBase64 = result.data?.[0]?.b64_json
-    if(!imageBase64) return res.status(500).json({ error: "No image returned" })
-
-    return res.json({
-      image: `data:image/png;base64,${imageBase64}`,
-      newCoins
-    })
-  }catch(err){
-    if(err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
-    if(err.message === "PREMIUM_REQUIRED") return res.status(403).json({ error: "Master Overkill requires Premium." })
-    if(err.message === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
-    await userRef.update({ coins: currentCoins - cost })
-
-    return res.json({
-      image: `data:image/png;base64,${imageBase64}`,
-      newCoins: currentCoins - cost
-    })
-  }catch(err){
-    console.error(err)
-    return res.status(500).json({ error: "Logo improvement failed" })
-  }
-})
-
-/* =====================================================
-30S FULL PACK GENERATION
-
-app.post("/api/generate-30s", requireAuth, async (req, res) => {
-  try{
-    const { platform, renderMode } = req.body
-    const userId = req.user.uid
-    if(!platform || !renderMode)
-app.post("/api/generate-30s", async (req, res) => {
-  try{
-    const { platform, renderMode, userId } = req.body
-    if(!platform || !renderMode || !userId)
-      return res.status(400).json({ error: "Missing data" })
-
-    const userRef = db.collection("users").doc(userId)
-    const userDoc = await userRef.get()
-    if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
-
-    const userData = userDoc.data() || {}
-    const currentCoins = userData.coins || 0
-    const premiumUntil = userData.premiumUntil || 0
-    const isPremium = premiumUntil > Date.now()
-
-    const master = JSON.parse(fs.readFileSync("./platformMaster.json", "utf8"))
-    if(!master[platform]) return res.status(400).json({ error: "Platform not supported" })
-
-    const assets = master[platform].assets
-    let cost = assets.length * 8
-    if(isPremium) cost = Math.floor(cost * 0.8)
-
-    // Ã¢Å“â€¦ atomic charge
-    let newCoins = 0
-    await db.runTransaction(async (t) => {
-      const snap = await t.get(userRef)
-      if(!snap.exists) throw new Error("USER_NOT_FOUND")
-      const d = snap.data() || {}
-      const currentCoins = d.coins || 0
-      if(currentCoins < cost) throw new Error("NOT_ENOUGH_COINS")
-      newCoins = currentCoins - cost
-      t.update(userRef, { coins: newCoins })
-    })
-    if(currentCoins < cost)
-      return res.status(403).json({ error: "Not enough coins for 30s Pack" })
-
-    const generated = []
-
-    for(const asset of assets){
-      const result = await openai.images.generate({
-        model: "gpt-image-1",
-        prompt: asset.prompt,
-        size: asset.size || "1024x1024",
-        background: "transparent"
-      })
-
-      generated.push({
-        name: asset.name + ".png",
-        image: `data:image/png;base64,${result.data[0].b64_json}`
-      })
-    }
-
-    return res.json({
-      files: generated,
-      newCoins
-    })
-  }catch(err){
-    if(err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
-    if(err.message === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins for 30s Pack" })
-    await userRef.update({ coins: currentCoins - cost })
-
-    return res.json({
-      files: generated,
-      newCoins: currentCoins - cost
-    })
-  }catch(err){
-    console.error(err)
-    return res.status(500).json({ error: "30s generation failed" })
-  }
-})
-
-/* =====================================================
-START SERVER
+/* ================================
+START
+================================ */
 
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
-  console.log(`Ã°Å¸Å¡â‚¬ Backend running on port ${PORT}`)
+  console.log("Backend running on port", PORT)
 })
