@@ -12,9 +12,9 @@ dotenv.config()
 const app = express()
 <<<<<<< HEAD
 
-/* =========================
+/* ================================
 CORS (locked)
-========================= */
+================================ */
 
 const allowedOrigins = [
   process.env.FRONTEND_BASE_URL,
@@ -31,10 +31,6 @@ app.use(cors({
   },
   credentials: true
 }))
-=======
-app.use(cors())
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
-
 /* =========================
 STRIPE
 ========================= */
