@@ -10,11 +10,9 @@ import Stripe from "stripe"
 dotenv.config()
 
 const app = express()
-<<<<<<< HEAD
 
 /* ================================
 CORS (locked)
-================================ */
 
 const allowedOrigins = [
   process.env.FRONTEND_BASE_URL,
@@ -33,7 +31,6 @@ app.use(cors({
 }))
 /* =========================
 STRIPE
-========================= */
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY || ""
 const stripe = stripeSecret ? new Stripe(stripeSecret, { apiVersion: "2024-06-20" }) : null
@@ -45,7 +42,6 @@ function getOrigin(req){
 
 /* =========================
 FIREBASE ADMIN
-========================= */
 
 if(!process.env.FIREBASE_SERVICE_ACCOUNT){
   console.error("FIREBASE_SERVICE_ACCOUNT is missing!")
@@ -68,9 +64,7 @@ admin.initializeApp({
 const db = admin.firestore()
 
 /* =========================
-<<<<<<< HEAD
 AUTH MIDDLEWARE
-========================= */
 
 async function requireAuth(req, res, next){
   try{
@@ -87,10 +81,7 @@ async function requireAuth(req, res, next){
 }
 
 /* =========================
-=======
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
 OPENAI
-========================= */
 
 if(!process.env.OPENAI_API_KEY){
   console.error("OPENAI_API_KEY is missing!")
@@ -101,7 +92,6 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 /* =====================================================
 STRIPE WEBHOOK (RAW BODY!) MUST be BEFORE express.json
-===================================================== */
 
 app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async (req, res) => {
   try{
@@ -140,13 +130,11 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
 
 /* =========================
 JSON BODY (AFTER WEBHOOK)
-========================= */
 
 app.use(express.json({ limit: "25mb" }))
 
 /* =========================
 RATE LIMIT
-========================= */
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
@@ -163,7 +151,6 @@ app.use("/api/create-checkout-session", limiter)
 
 /* =====================================================
 HEALTH CHECK
-===================================================== */
 
 app.get("/", (req, res) => {
   res.status(200).json({
@@ -176,7 +163,6 @@ app.get("/", (req, res) => {
 
 /* =====================================================
 COIN PACKS (Frontend display)
-===================================================== */
 
 const COIN_PACKS = {
   coins_120:  { coins: 120,  display: "4,99 €",  unit_amount: 499,  name: "120 Coins Paket",  priceId: "price_1T6urn2aeCQNbsN6wCtC5mkGV" },
@@ -194,9 +180,7 @@ app.get("/api/packs", (req, res) => {
 })
 
 /* =====================================================
-<<<<<<< HEAD
 GET USER COINS (secure)
-===================================================== */
 
 app.post("/api/get-coins", requireAuth, async (req, res) => {
   try{
@@ -222,7 +206,6 @@ app.post("/api/get-coins", requireAuth, async (req, res) => {
 
 /* =====================================================
 COIN PURCHASE (STRIPE CHECKOUT)
-===================================================== */
 
 app.post("/api/create-checkout-session", requireAuth, async (req, res) => {
   try{
@@ -231,9 +214,7 @@ app.post("/api/create-checkout-session", requireAuth, async (req, res) => {
     const userId = req.user.uid
     const { packId } = req.body
     if(!packId) return res.status(400).json({ error: "Missing data" })
-=======
 COIN PURCHASE (STRIPE CHECKOUT)
-===================================================== */
 
 app.post("/api/create-checkout-session", async (req, res) => {
   try{
@@ -241,12 +222,10 @@ app.post("/api/create-checkout-session", async (req, res) => {
 
     const { userId, packId } = req.body
     if(!userId || !packId) return res.status(400).json({ error: "Missing data" })
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
 
     const pack = COIN_PACKS[packId]
     if(!pack) return res.status(400).json({ error: "Unknown pack" })
 
-<<<<<<< HEAD
     // Optional: ensure user doc exists (create minimal doc if missing)
     const userRef = db.collection("users").doc(userId)
     const userDoc = await userRef.get()
@@ -258,11 +237,9 @@ app.post("/api/create-checkout-session", async (req, res) => {
         createdAt: Date.now()
       }, { merge: true })
     }
-=======
     const userRef = db.collection("users").doc(userId)
     const userDoc = await userRef.get()
     if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
 
     const origin = getOrigin(req)
 
@@ -296,20 +273,16 @@ app.post("/api/create-checkout-session", async (req, res) => {
 
 /* =====================================================
 SINGLE LOGO GENERATION
-===================================================== */
 
-<<<<<<< HEAD
 app.post("/api/generate-logo", requireAuth, async (req, res) => {
   try{
     const { prompt, renderMode } = req.body
     const userId = req.user.uid
     if(!prompt || !renderMode)
-=======
 app.post("/api/generate-logo", async (req, res) => {
   try{
     const { prompt, renderMode, userId } = req.body
     if(!prompt || !renderMode || !userId)
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
       return res.status(400).json({ error: "Missing data" })
 
     const renderCosts = {
@@ -324,7 +297,6 @@ app.post("/api/generate-logo", async (req, res) => {
     let cost = renderCosts[renderMode] || 10
 
     const userRef = db.collection("users").doc(userId)
-<<<<<<< HEAD
 
     // ✅ ATOMIC coin check + deduct (prevents multi-request exploit)
     let newCoins = 0
@@ -348,7 +320,6 @@ app.post("/api/generate-logo", async (req, res) => {
       newCoins = currentCoins - cost
       t.update(userRef, { coins: newCoins })
     })
-=======
     const userDoc = await userRef.get()
     if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
 
@@ -364,7 +335,6 @@ app.post("/api/generate-logo", async (req, res) => {
 
     if(currentCoins < cost)
       return res.status(403).json({ error: "Not enough coins" })
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
 
     const result = await openai.images.generate({
       model: "gpt-image-1",
@@ -375,7 +345,6 @@ app.post("/api/generate-logo", async (req, res) => {
 
     const imageBase64 = result.data[0].b64_json
 
-<<<<<<< HEAD
     return res.json({
       image: `data:image/png;base64,${imageBase64}`,
       newCoins
@@ -384,7 +353,6 @@ app.post("/api/generate-logo", async (req, res) => {
     if(err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
     if(err.message === "PREMIUM_REQUIRED") return res.status(403).json({ error: "Master Overkill requires Premium." })
     if(err.message === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
-=======
     await userRef.update({ coins: currentCoins - cost })
 
     return res.json({
@@ -392,7 +360,6 @@ app.post("/api/generate-logo", async (req, res) => {
       newCoins: currentCoins - cost
     })
   }catch(err){
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
     console.error(err)
     return res.status(500).json({ error: "Image generation failed" })
   }
@@ -400,9 +367,7 @@ app.post("/api/generate-logo", async (req, res) => {
 
 /* =====================================================
 STYLE DNA (analyze uploaded image -> reusable prompt)
-===================================================== */
 
-<<<<<<< HEAD
 app.post("/api/style-dna", requireAuth, async (req, res) => {
   try{
     const { imageDataUrl } = req.body
@@ -411,14 +376,12 @@ app.post("/api/style-dna", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Missing data" })
 
     // ensure user exists
-=======
 app.post("/api/style-dna", async (req, res) => {
   try{
     const { imageDataUrl, userId } = req.body
     if(!imageDataUrl || !userId)
       return res.status(400).json({ error: "Missing data" })
 
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
     const userRef = db.collection("users").doc(userId)
     const userDoc = await userRef.get()
     if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
@@ -461,20 +424,16 @@ app.post("/api/style-dna", async (req, res) => {
 
 /* =====================================================
 SELFIE -> LOGO (image edit)
-===================================================== */
 
-<<<<<<< HEAD
 app.post("/api/logo-from-image", requireAuth, async (req, res) => {
   try{
     const { imageDataUrl, name, renderMode, styleDNA } = req.body
     const userId = req.user.uid
     if(!imageDataUrl || !name || !renderMode)
-=======
 app.post("/api/logo-from-image", async (req, res) => {
   try{
     const { imageDataUrl, name, renderMode, userId, styleDNA } = req.body
     if(!imageDataUrl || !name || !renderMode || !userId)
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
       return res.status(400).json({ error: "Missing data" })
 
     const renderCosts = {
@@ -489,7 +448,6 @@ app.post("/api/logo-from-image", async (req, res) => {
     let cost = renderCosts[renderMode] || 12
 
     const userRef = db.collection("users").doc(userId)
-<<<<<<< HEAD
 
     let newCoins = 0
     await db.runTransaction(async (t) => {
@@ -512,7 +470,6 @@ app.post("/api/logo-from-image", async (req, res) => {
       newCoins = currentCoins - cost
       t.update(userRef, { coins: newCoins })
     })
-=======
     const userDoc = await userRef.get()
     if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
 
@@ -528,7 +485,6 @@ app.post("/api/logo-from-image", async (req, res) => {
 
     if(currentCoins < cost)
       return res.status(403).json({ error: "Not enough coins" })
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
 
     const prompt = `
 Create a professional esports gaming logo from the uploaded selfie.
@@ -551,7 +507,6 @@ Transparent background.
     const imageBase64 = result.data?.[0]?.b64_json
     if(!imageBase64) return res.status(500).json({ error: "No image returned" })
 
-<<<<<<< HEAD
     return res.json({
       image: `data:image/png;base64,${imageBase64}`,
       newCoins
@@ -560,7 +515,6 @@ Transparent background.
     if(err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
     if(err.message === "PREMIUM_REQUIRED") return res.status(403).json({ error: "Master Overkill requires Premium." })
     if(err.message === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
-=======
     await userRef.update({ coins: currentCoins - cost })
 
     return res.json({
@@ -568,7 +522,6 @@ Transparent background.
       newCoins: currentCoins - cost
     })
   }catch(err){
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
     console.error(err)
     return res.status(500).json({ error: "Selfie logo generation failed" })
   }
@@ -576,20 +529,16 @@ Transparent background.
 
 /* =====================================================
 IMPROVE EXISTING LOGO (image edit)
-===================================================== */
 
-<<<<<<< HEAD
 app.post("/api/improve-logo", requireAuth, async (req, res) => {
   try{
     const { imageDataUrl, renderMode, notes } = req.body
     const userId = req.user.uid
     if(!imageDataUrl || !renderMode)
-=======
 app.post("/api/improve-logo", async (req, res) => {
   try{
     const { imageDataUrl, renderMode, userId, notes } = req.body
     if(!imageDataUrl || !renderMode || !userId)
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
       return res.status(400).json({ error: "Missing data" })
 
     const renderCosts = {
@@ -604,7 +553,6 @@ app.post("/api/improve-logo", async (req, res) => {
     let cost = renderCosts[renderMode] || 10
 
     const userRef = db.collection("users").doc(userId)
-<<<<<<< HEAD
 
     let newCoins = 0
     await db.runTransaction(async (t) => {
@@ -627,7 +575,6 @@ app.post("/api/improve-logo", async (req, res) => {
       newCoins = currentCoins - cost
       t.update(userRef, { coins: newCoins })
     })
-=======
     const userDoc = await userRef.get()
     if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
 
@@ -643,7 +590,6 @@ app.post("/api/improve-logo", async (req, res) => {
 
     if(currentCoins < cost)
       return res.status(403).json({ error: "Not enough coins" })
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
 
     const prompt = `
 Improve this logo to next level while keeping the same identity.
@@ -666,7 +612,6 @@ Transparent background.
     const imageBase64 = result.data?.[0]?.b64_json
     if(!imageBase64) return res.status(500).json({ error: "No image returned" })
 
-<<<<<<< HEAD
     return res.json({
       image: `data:image/png;base64,${imageBase64}`,
       newCoins
@@ -675,7 +620,6 @@ Transparent background.
     if(err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
     if(err.message === "PREMIUM_REQUIRED") return res.status(403).json({ error: "Master Overkill requires Premium." })
     if(err.message === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
-=======
     await userRef.update({ coins: currentCoins - cost })
 
     return res.json({
@@ -683,7 +627,6 @@ Transparent background.
       newCoins: currentCoins - cost
     })
   }catch(err){
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
     console.error(err)
     return res.status(500).json({ error: "Logo improvement failed" })
   }
@@ -691,20 +634,16 @@ Transparent background.
 
 /* =====================================================
 30S FULL PACK GENERATION
-===================================================== */
 
-<<<<<<< HEAD
 app.post("/api/generate-30s", requireAuth, async (req, res) => {
   try{
     const { platform, renderMode } = req.body
     const userId = req.user.uid
     if(!platform || !renderMode)
-=======
 app.post("/api/generate-30s", async (req, res) => {
   try{
     const { platform, renderMode, userId } = req.body
     if(!platform || !renderMode || !userId)
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
       return res.status(400).json({ error: "Missing data" })
 
     const userRef = db.collection("users").doc(userId)
@@ -712,10 +651,7 @@ app.post("/api/generate-30s", async (req, res) => {
     if(!userDoc.exists) return res.status(404).json({ error: "User not found" })
 
     const userData = userDoc.data() || {}
-<<<<<<< HEAD
-=======
     const currentCoins = userData.coins || 0
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
     const premiumUntil = userData.premiumUntil || 0
     const isPremium = premiumUntil > Date.now()
 
@@ -726,7 +662,6 @@ app.post("/api/generate-30s", async (req, res) => {
     let cost = assets.length * 8
     if(isPremium) cost = Math.floor(cost * 0.8)
 
-<<<<<<< HEAD
     // ✅ atomic charge
     let newCoins = 0
     await db.runTransaction(async (t) => {
@@ -738,10 +673,8 @@ app.post("/api/generate-30s", async (req, res) => {
       newCoins = currentCoins - cost
       t.update(userRef, { coins: newCoins })
     })
-=======
     if(currentCoins < cost)
       return res.status(403).json({ error: "Not enough coins for 30s Pack" })
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
 
     const generated = []
 
@@ -759,7 +692,6 @@ app.post("/api/generate-30s", async (req, res) => {
       })
     }
 
-<<<<<<< HEAD
     return res.json({
       files: generated,
       newCoins
@@ -767,7 +699,6 @@ app.post("/api/generate-30s", async (req, res) => {
   }catch(err){
     if(err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
     if(err.message === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins for 30s Pack" })
-=======
     await userRef.update({ coins: currentCoins - cost })
 
     return res.json({
@@ -775,7 +706,6 @@ app.post("/api/generate-30s", async (req, res) => {
       newCoins: currentCoins - cost
     })
   }catch(err){
->>>>>>> 4adc12489b716fc864c574220ff523bd9a79177b
     console.error(err)
     return res.status(500).json({ error: "30s generation failed" })
   }
@@ -783,7 +713,6 @@ app.post("/api/generate-30s", async (req, res) => {
 
 /* =====================================================
 START SERVER
-===================================================== */
 
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
