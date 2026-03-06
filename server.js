@@ -20,6 +20,8 @@ CORS (locked)
 
 const allowedOrigins = [
   process.env.FRONTEND_BASE_URL,
+  "https://logomakergermany-f2312.web.app",
+  "https://logomakergermany-f2312.firebaseapp.com",
   "http://localhost:5500",
   "http://127.0.0.1:5500"
 ].filter(Boolean)
@@ -49,7 +51,7 @@ app.post("/api/stripe-webhook", express.raw({ type: "application/json" }), async
 
     const event = stripe.webhooks.constructEvent(req.body, sig, secret)
 
-    // TODO: here you would credit coins after successful checkout (checkout.session.completed)
+    // TODO: credit coins after successful checkout (checkout.session.completed)
     // Keep it safe: always verify metadata userId etc.
     return res.json({ received: true, type: event.type })
   } catch (e) {
@@ -120,6 +122,18 @@ async function requireAuth(req, res, next) {
   } catch (e) {
     return res.status(401).json({ error: "Invalid token" })
   }
+}
+
+/* ================================
+HELPER: DAY KEY (UTC)
+================================ */
+
+function dayKeyUTC() {
+  const d = new Date()
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0")
+  const da = String(d.getUTCDate()).padStart(2, "0")
+  return `${y}-${m}-${da}`
 }
 
 /* ================================
@@ -216,6 +230,70 @@ app.post("/api/generate-logo", requireAuth, async (req, res) => {
     if (msg === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
     console.error(e)
     return res.status(500).json({ error: "Generation failed" })
+  }
+})
+
+/* ================================
+GENERATE 30s (atomic coins + daily limit)
+SAFE TEST MODE (dummy response)
+================================ */
+
+app.post("/api/generate-30s", requireAuth, async (req, res) => {
+  try {
+    if (!db) return res.status(500).json({ error: "DB not ready" })
+
+    const userId = req.user.uid
+
+    // ✅ Safe test setup:
+    // - Each 30s run costs 300 coins
+    // - Max 2 runs per day per user
+    const COST_30S = 300
+    const DAILY_LIMIT = 2
+    const today = dayKeyUTC()
+
+    const userRef = db.collection("users").doc(userId)
+
+    let newCoins = 0
+    let usedToday = 0
+
+    await db.runTransaction(async (t) => {
+      const snap = await t.get(userRef)
+      if (!snap.exists) throw new Error("USER_NOT_FOUND")
+
+      const data = snap.data() || {}
+      const currentCoins = data.coins || 0
+
+      const counters = data.daily30s || {}
+      usedToday = counters[today] || 0
+
+      if (usedToday >= DAILY_LIMIT) throw new Error("DAILY_LIMIT_30S")
+      if (currentCoins < COST_30S) throw new Error("NOT_ENOUGH_COINS")
+
+      newCoins = currentCoins - COST_30S
+
+      t.update(userRef, {
+        coins: newCoins,
+        [`daily30s.${today}`]: usedToday + 1
+      })
+    })
+
+    // ✅ TODO: Replace this with real 30s generation later
+    // For now it returns a dummy payload so UI can proceed and you can test coins/limits safely.
+    return res.json({
+      ok: true,
+      message: "30s test run accepted (dummy). Hook real generator next.",
+      newCoins,
+      dailyUsed: usedToday + 1,
+      dailyLimit: DAILY_LIMIT
+    })
+
+  } catch (e) {
+    const msg = e?.message || String(e)
+    if (msg === "USER_NOT_FOUND") return res.status(404).json({ error: "User not found" })
+    if (msg === "DAILY_LIMIT_30S") return res.status(429).json({ error: "Daily 30s limit reached" })
+    if (msg === "NOT_ENOUGH_COINS") return res.status(403).json({ error: "Not enough coins" })
+    console.error(e)
+    return res.status(500).json({ error: "30s generation failed" })
   }
 })
 
