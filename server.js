@@ -86,21 +86,23 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     if (!admin.apps.length) {
       const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
 
+      // 🔥 DAS IST DER FIX
+      serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n")
+
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount)
       })
 
       db = admin.firestore()
 
-      console.log("Firebase Admin initialized")
+      console.log("✅ Firebase Admin initialized")
     }
   } catch (e) {
-    console.error("Firebase Admin init failed:", e?.message || e)
+    console.error("❌ Firebase Admin init failed:", e?.message || e)
   }
 } else {
-  console.log("Firebase disabled (no service account)")
+  console.log("⚠️ Firebase disabled (no service account)")
 }
-
 /* ================================
 OPENAI
 ================================ */
