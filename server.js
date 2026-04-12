@@ -152,12 +152,66 @@ app.get("/api/test", (req, res) => {
   })
 })
 
-/* ================================
-START
-================================ */
+
+/* =========================
+REGISTER
+========================= */
+
+let users = [];
+
+app.post("/api/register", (req, res) => {
+
+  const { email, password } = req.body;
+
+  if(!email || !password){
+    return res.json({
+      success: false,
+      error: "Missing fields"
+    });
+  }
+
+  const exists = users.find(u => u.email === email);
+
+  if(exists){
+    return res.json({
+      success: false,
+      error: "User exists"
+    });
+  }
+
+  users.push({ email, password });
+
+  console.log("New user:", email);
+
+  res.json({
+    success: true
+  });
+
+});
 
 const PORT = process.env.PORT || 3000
 
 app.listen(PORT, () => {
   console.log("Backend running on port", PORT)
+  app.post("/api/login", (req, res) => {
+
+  const { email, password } = req.body;
+
+  const user = users.find(u => 
+    u.email === email && u.password === password
+  );
+
+  if(!user){
+    return res.status(401).json({
+      success: false,
+      error: "Invalid credentials"
+    });
+  }
+
+  res.json({
+    success: true,
+    token: "test-token"
+  });
+
+});
 })
